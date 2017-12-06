@@ -384,11 +384,261 @@ shader代码：
 
 
 - Separation：顾名思义，该个体用来规避周围个体的行为。  
-<Center>![](https://connect-cdn-china2.unity.com/p/images/c39be0ed-c5b5-4680-b1fe-4e5b95dcbbb5_separation.gif)
+![](https://connect-cdn-china2.unity.com/p/images/c39be0ed-c5b5-4680-b1fe-4e5b95dcbbb5_separation.gif)
 
 - Alignment：作为一个群体，要有一个大致统一的前进方向。因此作为群体中的某个个体，可以根据自己周围的同伴的前进方向获取一个前进方向。  
   
-<Center>![](https://connect-cdn-china2.unity.com/p/images/2f493ccc-6c95-41ae-ae69-3140e996f084_alignment.gif)  
+![](https://connect-cdn-china2.unity.com/p/images/2f493ccc-6c95-41ae-ae69-3140e996f084_alignment.gif)  
 -   Cohesion：同样，作为一个群体肯定要有一个向心力。否则队伍四散奔走就不好玩了，因此每个个体就可以根据自己周围同伴的位置信息获取一个向中心聚拢的方向。  
-<Center>![](https://connect-cdn-china2.unity.com/p/images/03782ea7-1d2c-4974-93c0-b34b04772028_cohesion.gif)  
-以上三种行为需要同时加以考虑，才有可能模拟出一个接近真实的效果。
+ ![](https://connect-cdn-china2.unity.com/p/images/03782ea7-1d2c-4974-93c0-b34b04772028_cohesion.gif)  
+以上三种行为需要同时加以考虑，才有可能模拟出一个接近真实的效果。  
+  
+  
+可以看出，这里的逻辑并不复杂，但是麻烦的问题在于实现这套逻辑的前提是每个个体boid都需要获取自己周围的同伴信息。  
+
+因此最简单也最通用的方式就是每个boid都要和群落中的所有boid比较位置信息，获取二者之间的距离，如果小于阈值则判定是自己周围的同伴。而这种比较的时间复杂度显然是O( n^2)。因此，当群体是由几百个个体组成时，直接在cpu上计算时的表现还是可以接受的。但是数量一旦继续上升，效果就很难保证了。  
+![](https://connect-cdn-china2.unity.com/p/images/530e5058-169a-4e1a-9a55-66c5cc6e1902_v2_739bf79888a1ed6eeefe1939dc8a25a2_b.png)  
+当然，在Unity中我们还可以利用它的物理组件来获取一个boid个体周围的同伴信息  
+这个方法会返回和自己重叠的对象列表，由于unity使用了空间划分的机制，所以这种方式的性能要好于直接比较n个boid之间的距离。  
+![](https://connect-cdn-china2.unity.com/p/images/08040370-3dc5-4838-bcda-c07f35c58eb2_686199_20170810152704214_1593882790.gif)  
+但是即便如此，cpu的计算能力仍然是一个瓶颈。随着群体个体数量的上升，性能也会快速的下降。  
+###02 GPU的优势  
+
+既然限制的瓶颈在于CPU面对大规模个体时的计算能力的不足，那么一个自然的想法就是将这部分计算转移到更擅长大规模计算的GPU上来进行.  
+![](https://connect-cdn-china2.unity.com/p/images/24a6ddd7-44e4-40d5-be2c-2772880302ab_cpu_vs_gpu_n.jpg)  
+CPU的结构复杂，主要完成逻辑控制和缓存功能，运算单元较少。与CPU相比，GPU的设计目的是尽可能的快速完成图像处理，通过简化逻辑控制并增加运算单元实现了高性能的并行计算。  
+
+利用GPU的超强计算能力来实现一些渲染之外的功能并非一个新的概念，早在十年前nvidia就为GPU引入了一个易用的编程接口，即CUDA统一计算架构，之后微软推出了DirectCompute——它随DirectX 11一同发布。  
+
+和常见的vertex shader和fragment shader类似，要在GPU运行我们自己设定的逻辑也需要通过shader，不过和传统的shader的不同之处在于，compute shader并非传统的渲染流水线中的一个阶段，相反它主要用来计算原本由CPU处理的通用计算任务，这些通用计算常常与图形处理没有任何关系，因此这种方式也被称为GPGPU——General-purpose computing on graphics processing units，图形处理器通用计算。  
+
+利用这些功能，之前由CPU来实现的计算就可以转移到计算能力更强大的GPU上来进行了，比如物理计算、AI等等。  
+
+而Unity的Compute Shader十分接近DirectCompute，最初Unity引入Compute Shader时仅仅支持DirectX 11，不过目前的版本已经支持别的图形API了。详情可以参考：Unity - Manual: Compute shaders。
+在Unity中我们可以很方便的创建一个Compute Shader，  
+这里我先简单的介绍一下这个Compute Shader中的相关概念，首先在这里我们指明了这个shader的入口函数。之后，声明了在compute shader中操作的数据。
+这里使用的是RWTexture2D，而我们更常用的是RWStructuredBuffer（RW在这里表示可读写）。
+之后是很关键的一行：[numthreads(8,8,1)]
+这里首先要说一下Compute Shader执行的线程模型。DirectCompute将并行计算的问题分解成了多个线程组，每个线程组内又包含了多个线程。  
+![](https://connect-cdn-china2.unity.com/p/images/4daf9184-fa89-4ec9-bb4b-7c0362e63e27_v2_18425eeab259f2151dc7830e0926f6a3_b.png)  
+[numthreads(8,8,1)]的意思是在这个线程组中分配了8x8x1=64个线程，当然我们也可以直接使用  
+因为三维线程模型主要是为了方便某些使用情景，和性能关系不大，硬件在执行时仍然是把所有线程当做一维的。
+至此，我们已经在shader中确定了每个线程组内包括几个线程，但是我们还没有分配线程组，也没有开始执行这个shader。
+和一般的shader不同，compute shader和图形无关，因此在使用compute shader时不会涉及到mesh、material这些内容。相反，compute shader的设置和执行要在c#脚本中进行。  
+在c#脚本中准备、传送数据，分配线程组并执行compute shader，最后数据再从GPU传递回CPU。
+不过，这里有一个问题需要说明。虽然现在将计算转移到GPU后计算能力已经不再是瓶颈，但是数据的转移此时变成了首要的限制因素。而且在Dispatch之后直接调用GetData可能会造成CPU的阻塞。因为CPU此时需要等待GPU计算完毕并将数据传递回CPU，所以希望日后Unity能够提供一个异步版本的GetData。
+最后将行为模拟的逻辑从CPU转移到GPU之后，模拟10，000个boid组成的大群组在我的笔记本上已经能跑在30FPS上下了。  
+###03 工程实现  
+    
+C#代码如下   
+
+	GPUBoid脚本 ： 
+	using UnityEngine;
+
+	public struct GPUBoid
+	{
+    public Vector3 pos, rot, flockPos;
+    public float speed, nearbyDis, boidsCount;
+	}  
+  
+    
+  
+  
+	GPUFlock脚本：
+    using System;
+	using System.Collections;
+	using System.Collections.Generic;
+	using UnityEngine;
+	using Random = UnityEngine.Random;
+
+	public class GPUFlock : MonoBehaviour
+	{
+
+    #region 字段
+
+    public ComputeShader CShader;
+
+    public GameObject boidPrefab;
+    public int boidsCount;
+    public float spawnRadius;
+    public GameObject[] boidsGo;
+    public GPUBoid[] boidsData;
+    public float flockSpeed;
+    public float nearbyDis;
+
+    private Vector3 targetPos = Vector3.zero;
+    private int kernelHandle;
+
+    #endregion
+
+
+    #region 方法
+
+    void Start()
+    {
+        this.boidsGo = new GameObject[this.boidsCount];
+        this.boidsData = new GPUBoid[this.boidsCount];
+        this.kernelHandle = CShader.FindKernel("CSMain");
+
+        for (int i = 0; i < this.boidsCount; i++)
+        {
+            this.boidsData[i] = this.CreatBoidData();
+            this.boidsGo[i] = Instantiate(boidPrefab, this.boidsData[i].pos, Quaternion.Euler(this.boidsData[i].rot)) as GameObject;
+            this.boidsData[i].rot = this.boidsGo[i].transform.forward;
+        }
+    }
+
+    GPUBoid CreatBoidData()
+    {
+        GPUBoid boidData = new GPUBoid();
+        Vector3 pos = transform.position + Random.insideUnitSphere * spawnRadius;
+        Quaternion rot = Quaternion.Slerp(transform.rotation, Random.rotation, 0.3f);
+        boidData.pos = pos;
+        boidData.flockPos = transform.position;
+        boidData.boidsCount = this.boidsCount;
+        boidData.nearbyDis = this.nearbyDis;
+        boidData.speed = this.flockSpeed + Random.Range(-0.5f, 0.5f);
+
+        return boidData;
+    }
+
+    void Update()
+    {
+        this.targetPos += new Vector3(2f, 5f, 3f);
+        this.transform.localPosition += new Vector3(
+            (Mathf.Sin(Mathf.Deg2Rad * this.targetPos.x) * -0.2f),
+            (Mathf.Sin(Mathf.Deg2Rad * this.targetPos.y) * 0.2f),
+            (Mathf.Sin(Mathf.Deg2Rad * this.targetPos.z) * 0.2f)
+            );
+
+        ComputeBuffer buffer = new ComputeBuffer(boidsCount, 56);
+
+        for (int i = 0; i < this.boidsData.Length; i++)
+        {
+            this.boidsData[i].flockPos = this.transform.position;
+        }
+
+        buffer.SetData(this.boidsData);
+
+        CShader.SetBuffer(this.kernelHandle, "boidBuffer", buffer);
+        CShader.SetFloat("deltaTime", Time.deltaTime);
+        CShader.Dispatch(this.kernelHandle, this.boidsCount, 1, 1);
+        buffer.GetData(this.boidsData);
+        buffer.Release();
+
+        for (int i = 0; i < this.boidsData.Length; i++)
+        {
+            this.boidsGo[i].transform.localPosition = this.boidsData[i].pos;
+
+            if (!this.boidsData[i].rot.Equals(Vector3.zero))
+            {
+                this.boidsGo[i].transform.rotation = Quaternion.LookRotation(this.boidsData[i].rot);
+            }
+        }
+    }
+
+    #endregion
+	}  
+  
+  
+    
+	RotateForDemo脚本
+	using System.Collections;
+	using System.Collections.Generic;
+	using UnityEngine;
+
+	public class RotateForDemo : MonoBehaviour {
+
+	
+	void Update () {
+        transform.localRotation = Quaternion.AngleAxis(10 * Time.deltaTime, Vector3.up) * transform.localRotation;
+    }
+	}  
+  
+  
+  
+Shader代码如下：  
+
+	//  用来在gpu上实现集群效果
+	//
+
+	#pragma kernel CSMain
+
+	//封装计算单个boid时所需要的数据
+	struct Boid
+	{
+	float3 pos;
+	float3 rot;
+	float3 flockPos;
+	float speed;
+	float nearbyDis;
+	float boidsCount;
+	};
+
+	RWStructuredBuffer<Boid> boidBuffer;
+	float deltaTime;
+
+
+	[numthreads(128, 1, 1)]
+	void CSMain(uint3 id : SV_DispatchThreadID)
+	{
+	Boid boid = boidBuffer[id.x];
+
+	float3 pos = boid.pos;
+	float3 rot = boid.rot;
+
+	//separation
+	float3 separation = float3(0.0, 0.0, 0.0);
+
+	//alignment
+	float3 alignment = float3(0.0, 0.0, 0.0);
+
+	//cohesion
+	float3 cohesion = boid.flockPos;
+	float3 tempCohesion = float3(0.0, 0.0, 0.0);
+
+	float tempSpeed = 0;
+	uint nearbyCount = 0;
+
+
+	[loop]
+	for (int i = 0; i < int(boid.boidsCount); i++)
+	{
+		if (i != int(id.x))
+		{
+			Boid tempBoid = boidBuffer[i];
+			if (length(boid.pos - tempBoid.pos) < boid.nearbyDis)
+			{
+				separation += boid.pos - tempBoid.pos;
+
+				alignment += tempBoid.rot;
+
+				tempCohesion += tempBoid.pos;
+
+				nearbyCount++;
+			}
+		}
+	}
+
+	if (nearbyCount > 0)
+	{
+		alignment *= 1 / nearbyCount;
+		tempCohesion *= 1 / nearbyCount;
+	}
+
+	cohesion += tempCohesion;
+
+	float3 direction = alignment + separation + normalize(cohesion - boid.pos);
+
+	boid.rot = lerp(boid.rot, normalize(direction), deltaTime * 4);
+
+	boid.pos += boid.rot * boid.speed * deltaTime;
+
+	boidBuffer[id.x] = boid;
+	}
+
+###效果图  
+  ![](https://connect-cdn-china2.unity.com/p/images/34a81b10-0654-4b3b-80b1-14cf10805668_1372105_97d3645c946c708c.gif)
+###demo地址  
+[https://github.com/chenjd/Unity-Boids-Behavior-on-GPGPU](https://github.com/chenjd/Unity-Boids-Behavior-on-GPGPU)
+
