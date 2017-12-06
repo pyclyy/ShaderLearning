@@ -640,5 +640,9 @@ Shader代码如下：
 ###效果图  
   ![](https://connect-cdn-china2.unity.com/p/images/34a81b10-0654-4b3b-80b1-14cf10805668_1372105_97d3645c946c708c.gif)
 ###demo地址  
-[https://github.com/chenjd/Unity-Boids-Behavior-on-GPGPU](https://github.com/chenjd/Unity-Boids-Behavior-on-GPGPU)
+[https://github.com/chenjd/Unity-Boids-Behavior-on-GPGPU](https://github.com/chenjd/Unity-Boids-Behavior-on-GPGPU)  
+  
+  
+本项目是学习总结而来地址如下：  
+[陈嘉栋](https://connect.unity.com/u/592539d832b306001a705d92)
 
