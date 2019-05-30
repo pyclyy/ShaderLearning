@@ -36,7 +36,8 @@
 
 	void surf(Input IN, inout SurfaceOutputStandard o) {
 		fixed4 c = tex2D(_MainTex, IN.uv_MainTex);
-		o.Albedo = c.rgb;
+		float4  ps =  tex2Dlod(_SnowTrackTex, float4(IN.uv_MainTex, 0, 0)) * _SnowTrackFactor;
+		o.Albedo = c.rgb *ps.rgb ;
 		o.Normal = UnpackNormal(tex2D(_NormalMap, IN.uv_MainTex));
 		o.Alpha = c.a;
 	}
