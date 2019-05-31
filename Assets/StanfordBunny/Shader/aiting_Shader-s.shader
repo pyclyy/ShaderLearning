@@ -3,7 +3,7 @@
 	Properties
 	{
 		_MainTex ("Texture", 2D) = "white" {}
-	_FurFactor("FurFactor", Range(0.01, 0.05)) = 0.02
+	_FurFactor("FurFactor", Range(0.0, 0.05)) = 0.02
 	}
 		SubShader
 	{
